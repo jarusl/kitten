@@ -5,6 +5,7 @@
 #include <lwk/elf.h>
 #include <lwk/kfs.h>
 #include <lwk/sched.h>
+#include <lwk/initrd.h>
 
 /**
  * Maximum number of arguments and environment variables that may
@@ -23,7 +24,7 @@
 /**
  * The init_task ELF executable.
  */
-paddr_t init_elf_image;
+static uint8_t * init_elf_image;
 
 /**
  * Amount of memory to reserve for the init_task's heap.
@@ -49,6 +50,55 @@ param_string(init_argv, init_argv_str, sizeof(init_argv_str));
 static char init_envp_str[INIT_ENVP_LEN] = { 0 };
 param_string(init_envp, init_envp_str, sizeof(init_envp_str));
 
+
+static int
+__initrd_is_elf(paddr_t initrd_start, 
+		paddr_t initrd_end)
+{
+	uint8_t elf_hdr[4] = {0x7f, 'E', 'L', 'F'}; 
+
+	if (initrd_end - initrd_start <= sizeof(elf_hdr)) {
+		return 0;
+	} 
+
+	if (memcmp(__va(initrd_start), elf_hdr, sizeof(elf_hdr)) == 0) {
+		return 1;
+	}
+
+	return 0;
+}
+
+
+
+
+/**
+ *  Set the up userspace environment using INITRD data
+ */
+int
+setup_userspace(paddr_t initrd_start, 
+                paddr_t initrd_end)
+{
+	if (__initrd_is_elf(initrd_start, initrd_end)) {
+		printk("INITRD: ELF executable\n");
+		init_elf_image = __va(initrd_start);
+	} else if (initrd_is_initrd(initrd_start, initrd_end)) {
+		printk("INITRD: INITRD archive\n");
+		init_elf_image = unpack_initrd(initrd_start, initrd_end); 
+
+	} else {
+		printk("Error: Invalid INITRD format\n");
+		return -EINVAL;
+	}
+
+	if (init_elf_image == NULL) {
+		printk("Error: Invalid INITRD\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+
 /**
  * Creates the init_task.
  */
@@ -73,7 +123,7 @@ create_init_task(void)
 	/* This initializes start_state aspace_id, entry_point, and stack_ptr */
 	status =
 	elf_load(
-		__va(init_elf_image),
+		init_elf_image,
 		start_state.task_name,
 		INIT_ASPACE_ID,
 		PAGE_SIZE,
@@ -104,3 +154,6 @@ create_init_task(void)
 
 	return 0;
 }
+
+
+
